@@ -1,6 +1,6 @@
 // mypy-worker.js (ESM)
-import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.mjs";
-const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/";
+import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/pyodide.mjs";
+const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/";
 
 // Optional: if you host wheels locally, map them here.
 // Example: const WHEEL_URL = { "1.10.0": "/wheels/mypy-1.10.0-py3-none-any.whl", ... };
@@ -47,7 +47,7 @@ self.onmessage = async (e) => {
       await installMypy(payload?.mypyVersion || "1.10.0");
 
       const pythonVersion = pyodide.runPython(`import sys; sys.version.split()[0]`);
-      const pyodideVersion = (pyodide.version || "0.25.1");
+      const pyodideVersion = (pyodide.version || "0.28.3");
       let mv = await pyodide.runPythonAsync(`import importlib.metadata as md; md.version("mypy")`);
       const mypyVersion = mv.toJs ? mv.toJs() : String(mv);
       mv.destroy?.();
@@ -69,14 +69,17 @@ self.onmessage = async (e) => {
       if (!mypyImported) await pyodide.runPythonAsync("from mypy import api");
       post("checking");
 
-      const { filename, code, mypyFlags } = payload;
+      const { filename, code, mypyFlags, cacheDir } = payload;
       pyodide.FS.mkdirTree("/app");
+      if (cacheDir) {
+        pyodide.FS.mkdirTree(cacheDir);
+      }
       pyodide.FS.writeFile(`/app/${filename}`, code, { encoding: "utf8" });
 
       const start = performance.now();
       let rproxy = await pyodide.runPythonAsync(`
 from mypy import api
-api.run(${JSON.stringify([`/app/${payload.filename}`])} + ${JSON.stringify(mypyFlags)})
+api.run(${JSON.stringify([`/app/${filename}`])} + ${JSON.stringify(mypyFlags)})
       `);
       const result = rproxy.toJs();
       rproxy.destroy?.();

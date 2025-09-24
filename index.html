@@ -66,14 +66,27 @@ let editor, worker, ready = false, debounceTimer = null, decorationIds = [];
 
 function setStatus(text){ document.getElementById('status').textContent = text; }
 
-function defaultFlags() {
+function sanitizeForPath(value) {
+  return String(value).replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function currentCacheDir() {
+  const mypy = sanitizeForPath(document.getElementById('mypyver').value);
+  const py = sanitizeForPath(document.getElementById('pyver').value);
+  const strict = document.getElementById('strict').checked ? 'strict' : 'nostrict';
+  const ignore = document.getElementById('ignore').checked ? 'ignore' : 'noignore';
+  return `/tmp/mypy-cache/${mypy}/${py}/${strict}/${ignore}`;
+}
+
+function defaultFlags(cacheDirOverride) {
   const flags = ['--no-pretty', '--show-error-codes', '--show-column-numbers',
                  '--hide-error-context', '--no-error-summary', '--follow-imports=skip'];
   if (document.getElementById('strict').checked) flags.push('--strict');
   if (document.getElementById('ignore').checked) flags.push('--ignore-missing-imports');
   const py = document.getElementById('pyver').value;
   flags.push('--python-version', py);
-  flags.push('--cache-dir', '/dev/null'); // small speed boost in WASM
+  const cacheDir = cacheDirOverride ?? currentCacheDir();
+  flags.push('--cache-dir', cacheDir);
   return flags;
 }
 
@@ -113,7 +126,8 @@ function startWorker() {
     type: 'init',
     payload: {
       mypyVersion: document.getElementById('mypyver').value,
-      mypyFlags: defaultFlags()
+      mypyFlags: defaultFlags(currentCacheDir()),
+      cacheDir: currentCacheDir()
     }
   });
 }
@@ -121,12 +135,14 @@ function startWorker() {
 function runCheck() {
   if (!ready) return;
   const code = editor.getValue();
+  const cacheDir = currentCacheDir();
   worker.postMessage({
     type: 'check',
     payload: {
       filename: 'snippet.py',
       code,
-      mypyFlags: defaultFlags()
+      mypyFlags: defaultFlags(cacheDir),
+      cacheDir
     }
   });
 }
