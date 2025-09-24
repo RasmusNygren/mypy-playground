@@ -2,9 +2,28 @@
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/pyodide.mjs";
 const PYODIDE_BASE = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/";
 
-// Optional: if you host wheels locally, map them here.
-// Example: const WHEEL_URL = { "1.10.0": "/wheels/mypy-1.10.0-py3-none-any.whl", ... };
-const WHEEL_URL = {};
+// Map mypy versions to pre-hosted wheel URLs served alongside this worker.
+const WHEEL_URL = {
+  "1.8.0": new URL("./wheels/mypy-1.8.0-py3-none-any.whl", import.meta.url).href,
+  "1.9.0": new URL("./wheels/mypy-1.9.0-py3-none-any.whl", import.meta.url).href,
+  "1.10.0": new URL("./wheels/mypy-1.10.0-py3-none-any.whl", import.meta.url).href,
+  "1.11.2": new URL("./wheels/mypy-1.11.2-py3-none-any.whl", import.meta.url).href,
+  "1.12.0": new URL("./wheels/mypy-1.12.0-py3-none-any.whl", import.meta.url).href,
+  "1.13.0": new URL("./wheels/mypy-1.13.0-py3-none-any.whl", import.meta.url).href,
+  "1.14.1": new URL("./wheels/mypy-1.14.1-py3-none-any.whl", import.meta.url).href,
+  "1.15.0": new URL("./wheels/mypy-1.15.0-py3-none-any.whl", import.meta.url).href,
+  "1.16.0": new URL("./wheels/mypy-1.16.0-py3-none-any.whl", import.meta.url).href,
+  "1.17.0": new URL("./wheels/mypy-1.17.0-py3-none-any.whl", import.meta.url).href,
+  "1.18.1": new URL("./wheels/mypy-1.18.1-py3-none-any.whl", import.meta.url).href,
+  "1.18.2": new URL("./wheels/mypy-1.18.2-py3-none-any.whl", import.meta.url).href,
+};
+
+const COMMON_DEPS = [
+  new URL("./wheels/typing_extensions-4.15.0-py3-none-any.whl", import.meta.url).href,
+  new URL("./wheels/mypy_extensions-1.1.0-py3-none-any.whl", import.meta.url).href,
+  new URL("./wheels/tomli-2.2.1-py3-none-any.whl", import.meta.url).href,
+  new URL("./wheels/pathspec-0.12.1-py3-none-any.whl", import.meta.url).href,
+];
 
 let pyodide = null;
 let mypyImported = false;
@@ -13,16 +32,16 @@ function post(type, payload) { postMessage({ type, payload }); }
 
 async function installMypy(version) {
   await pyodide.loadPackage("micropip");
-  const url = WHEEL_URL[version];
+  const wheel = WHEEL_URL[version];
+  const packages = wheel
+    ? [wheel, ...COMMON_DEPS]
+    : [`mypy==${version}`, "typing-extensions", "mypy-extensions", "tomli"];
+
   const py = `
 import micropip
-await micropip.install([${url ? JSON.stringify(url) : JSON.stringify(`mypy==${version}`)}])
-# These are tiny and sometimes required by older mypy versions:
-try:
-  await micropip.install(["typing-extensions","mypy-extensions"])
-except Exception:
-  pass
+await micropip.install(${JSON.stringify(packages)})
 `;
+
   await pyodide.runPythonAsync(py);
   // verify version
   let verProxy = await pyodide.runPythonAsync(`import importlib.metadata as md; md.version("mypy")`);
