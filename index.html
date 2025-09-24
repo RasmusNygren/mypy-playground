@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mypy Playground (WASM)</title>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+    #app { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
+    header, footer { padding: 8px 12px; border-bottom: 1px solid #eee; }
+    footer { border-top: 1px solid #eee; border-bottom: none; display:flex; gap:16px; }
+    .main { display: grid; grid-template-columns: 1fr 380px; gap: 0; min-height: 0; }
+    #editor { min-width: 0; height: calc(100vh - 110px); border-right: 1px solid #eee; }
+    #sidebar { display: flex; flex-direction: column; height: calc(100vh - 110px); }
+    #controls { padding: 8px; border-bottom: 1px solid #eee; display:flex; gap:8px; align-items:center; }
+    #results { padding: 8px; overflow: auto; flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .err { border-left: 3px solid #c00; padding-left: 8px; margin: 6px 0; }
+    .ok { color: #0a0; }
+    button { padding: 6px 10px; }
+    select, input[type="checkbox"] { margin-left: 6px; }
+  </style>
+  <!-- Monaco via CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <strong>Mypy Playground (WebAssembly)</strong>
+      <span id="status" style="margin-left:10px; opacity:.75;">loading…</span>
+    </header>
+
+    <div class="main">
+      <div id="editor"></div>
+      <aside id="sidebar">
+        <div id="controls">
+          <button id="run">Check</button>
+          <label>Python
+            <select id="pyver">
+              <option>3.12</option><option selected>3.11</option><option>3.10</option><option>3.9</option><option>3.8</option>
+            </select>
+          </label>
+          <label>Strict <input id="strict" type="checkbox"></label>
+          <label>Ignore missing imports <input id="ignore" type="checkbox" checked></label>
+        </div>
+        <div id="results" aria-live="polite">Waiting for mypy…</div>
+      </aside>
+    </div>
+
+    <footer>
+      <div>Tip: Ctrl/Cmd + Enter to type-check • Debounce 500ms</div>
+      <div id="versions" style="margin-left:auto; opacity:.75;"></div>
+    </footer>
+  </div>
+
+<script type="module">
+let editor, worker, ready=false, debounceTimer=null;
+
+function setStatus(text) { document.getElementById('status').textContent = text; }
+
+require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
+require(['vs/editor/editor.main'], () => {
+  editor = monaco.editor.create(document.getElementById('editor'), {
+    value: `from typing import List\n\ndef greet(name: str) -> str:\n    return "hi " + name\n\nx: List[int] = ["oops"]\nprint(greet(123))\n`,
+    language: 'python',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontLigatures: true
+  });
+
+  // Spawn worker
+  worker = new Worker('mypy-worker.js', { type: 'module' });
+  worker.onmessage = (e) => {
+    const { type, payload } = e.data;
+    if (type === 'init-done') {
+      ready = true;
+      setStatus('ready');
+      document.getElementById('versions').textContent =
+        `Pyodide ${payload.versions.pyodide}, mypy ${payload.versions.mypy}`;
+      // warmup import path
+      worker.postMessage({ type: 'warmup' });
+      runCheck(); // first run
+    } else if (type === 'checking') {
+      setStatus('checking…');
+    } else if (type === 'result') {
+      setStatus(`done in ${payload.durationMs} ms`);
+      renderDiagnostics(payload);
+    } else if (type === 'log') {
+      console.log('[worker]', payload);
+    } else if (type === 'error') {
+      setStatus('error');
+      document.getElementById('results').innerHTML =
+        `<div class="err">Worker error: ${payload}</div>`;
+    }
+  };
+
+  // Initialize worker
+  worker.postMessage({
+    type: 'init',
+    payload: {
+      pythonVersion: document.getElementById('pyver').value,
+      mypyFlags: defaultFlags()
+    }
+  });
+
+  // Controls
+  document.getElementById('run').addEventListener('click', runCheck);
+  document.getElementById('pyver').addEventListener('change', runCheck);
+  document.getElementById('strict').addEventListener('change', runCheck);
+  document.getElementById('ignore').addEventListener('change', runCheck);
+
+  // Debounced on-edit checks
+  editor.onDidChangeModelContent(() => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(runCheck, 500);
+  });
+
+  // Hotkey
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') runCheck();
+  });
+});
+
+function defaultFlags() {
+  const flags = ['--no-pretty', '--show-error-codes', '--show-column-numbers',
+                '--hide-error-context', '--no-error-summary', '--follow-imports=skip'];
+  if (document.getElementById('strict').checked) flags.push('--strict');
+  if (document.getElementById('ignore').checked) flags.push('--ignore-missing-imports');
+  const py = document.getElementById('pyver').value;
+  flags.push('--python-version', py);
+  // keep everything in the temp dir to avoid cache poisoning
+  flags.push('--cache-dir', '/tmp/mypycache');
+  return flags;
+}
+
+function runCheck() {
+  if (!ready) return;
+  const code = editor.getValue();
+  worker.postMessage({
+    type: 'check',
+    payload: {
+      filename: 'snippet.py',
+      code,
+      mypyFlags: defaultFlags()
+    }
+  });
+}
+
+function renderDiagnostics({ diagnostics, text }) {
+  // Render raw text
+  const res = document.getElementById('results');
+  if (!diagnostics.length) {
+    res.innerHTML = `<div class="ok">Success: no issues found</div><pre>${text}</pre>`;
+  } else {
+    res.innerHTML = diagnostics.map(d => `
+      <div class="err">
+        <div><strong>${d.file}:${d.line}:${d.column}</strong>  <code>[${d.code}]</code></div>
+        <div>${escapeHtml(d.message)}</div>
+      </div>`).join('') + `<pre>${text}</pre>`;
+  }
+
+  // Monaco decorations
+  const decorations = diagnostics.map(d => ({
+    range: new monaco.Range(d.line, d.column || 1, d.line, (d.column || 1) + 1),
+    options: {
+      isWholeLine: false,
+      inlineClassName: 'squiggle-error',
+      glyphMarginClassName: 'glyph-error',
+      glyphMarginHoverMessage: { value: `${d.message} [${d.code}]` }
+    }
+  }));
+  editor.deltaDecorations([], decorations);
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+</script>
+</body>
+</html>
