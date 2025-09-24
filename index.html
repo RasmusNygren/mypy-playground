@@ -39,6 +39,15 @@
               <option>3.12</option><option selected>3.11</option><option>3.10</option><option>3.9</option><option>3.8</option>
             </select>
           </label>
+            <label>mypy
+              <select id="mypyver">
+                <option>1.8.0</option>
+                <option>1.9.0</option>
+                <option selected>1.10.0</option>
+                <option>1.11.2</option>
+              </select>
+            </label>
+
           <label>Strict <input id="strict" type="checkbox"></label>
           <label>Ignore missing imports <input id="ignore" type="checkbox" checked></label>
         </div>
@@ -53,22 +62,28 @@
   </div>
 
 <script type="module">
-let editor, worker, ready=false, debounceTimer=null;
+let editor, worker, ready = false, debounceTimer = null, decorationIds = [];
 
-function setStatus(text) { document.getElementById('status').textContent = text; }
+function setStatus(text){ document.getElementById('status').textContent = text; }
 
-require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
-require(['vs/editor/editor.main'], () => {
-  editor = monaco.editor.create(document.getElementById('editor'), {
-    value: `from typing import List\n\ndef greet(name: str) -> str:\n    return "hi " + name\n\nx: List[int] = ["oops"]\nprint(greet(123))\n`,
-    language: 'python',
-    automaticLayout: true,
-    minimap: { enabled: false },
-    fontLigatures: true
-  });
+function defaultFlags() {
+  const flags = ['--no-pretty', '--show-error-codes', '--show-column-numbers',
+                 '--hide-error-context', '--no-error-summary', '--follow-imports=skip'];
+  if (document.getElementById('strict').checked) flags.push('--strict');
+  if (document.getElementById('ignore').checked) flags.push('--ignore-missing-imports');
+  const py = document.getElementById('pyver').value;
+  flags.push('--python-version', py);
+  flags.push('--cache-dir', '/dev/null'); // small speed boost in WASM
+  return flags;
+}
 
-  // Spawn worker
+function startWorker() {
+  if (worker) worker.terminate();
+  ready = false;
+  setStatus('loading…');
+
   worker = new Worker('mypy-worker.js', { type: 'module' });
+
   worker.onmessage = (e) => {
     const { type, payload } = e.data;
     if (type === 'init-done') {
@@ -85,6 +100,7 @@ require(['vs/editor/editor.main'], () => {
       setStatus(`done in ${payload.durationMs} ms`);
       renderDiagnostics(payload);
     } else if (type === 'log') {
+      // Optional: surface logs somewhere if you want
       console.log('[worker]', payload);
     } else if (type === 'error') {
       setStatus('error');
@@ -93,43 +109,13 @@ require(['vs/editor/editor.main'], () => {
     }
   };
 
-  // Initialize worker
   worker.postMessage({
     type: 'init',
     payload: {
-      pythonVersion: document.getElementById('pyver').value,
+      mypyVersion: document.getElementById('mypyver').value,
       mypyFlags: defaultFlags()
     }
   });
-
-  // Controls
-  document.getElementById('run').addEventListener('click', runCheck);
-  document.getElementById('pyver').addEventListener('change', runCheck);
-  document.getElementById('strict').addEventListener('change', runCheck);
-  document.getElementById('ignore').addEventListener('change', runCheck);
-
-  // Debounced on-edit checks
-  editor.onDidChangeModelContent(() => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(runCheck, 500);
-  });
-
-  // Hotkey
-  window.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') runCheck();
-  });
-});
-
-function defaultFlags() {
-  const flags = ['--no-pretty', '--show-error-codes', '--show-column-numbers',
-                '--hide-error-context', '--no-error-summary', '--follow-imports=skip'];
-  if (document.getElementById('strict').checked) flags.push('--strict');
-  if (document.getElementById('ignore').checked) flags.push('--ignore-missing-imports');
-  const py = document.getElementById('pyver').value;
-  flags.push('--python-version', py);
-  // keep everything in the temp dir to avoid cache poisoning
-  flags.push('--cache-dir', '/tmp/mypycache');
-  return flags;
 }
 
 function runCheck() {
@@ -144,9 +130,6 @@ function runCheck() {
     }
   });
 }
-
-let decorationIds = [];
-
 
 function renderDiagnostics({ diagnostics, text }) {
   const res = document.getElementById('results');
@@ -167,13 +150,11 @@ function renderDiagnostics({ diagnostics, text }) {
     }).join('');
     res.innerHTML = itemsHtml;
 
-    // Optional: collapsible raw output (so you can copy it if needed)
     const details = document.createElement('details');
     details.innerHTML = `<summary>Raw mypy output</summary><pre>${escapeHtml(text || '')}</pre>`;
     res.appendChild(details);
   }
 
-  // Update Monaco decorations (replace old ones)
   const newDecorations = list.map(d => ({
     range: new monaco.Range(
       d.line,
@@ -184,13 +165,48 @@ function renderDiagnostics({ diagnostics, text }) {
     options: {
       inlineClassName: 'squiggle-error',
       glyphMarginClassName: 'glyph-error',
-      glyphMarginHoverMessage: { value: `${escapeHtml(d.message)}${d.code ? ' [' + escapeHtml(d.code) + ']' : ''}` }
+      glyphMarginHoverMessage: { value:
+        `${escapeHtml(d.message)}${d.code ? ' [' + escapeHtml(d.code) + ']' : ''}` }
     }
   }));
   decorationIds = editor.deltaDecorations(decorationIds, newDecorations);
 }
 
 function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// Monaco boot + UI wiring (unchanged aside from the new dropdown listener)
+require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
+require(['vs/editor/editor.main'], () => {
+  editor = monaco.editor.create(document.getElementById('editor'), {
+    value: `# Try changing "mypy" and "Python" versions in the right panel\nfrom typing import List\n\ndef greet(name: str) -> str:\n    return "hi " + name\n\nx: List[int] = ["oops"]\nprint(greet(123))\n`,
+    language: 'python',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontLigatures: true
+  });
+
+  // Start worker for the initial version
+  startWorker();
+
+  document.getElementById('run').addEventListener('click', runCheck);
+  document.getElementById('pyver').addEventListener('change', runCheck);
+  document.getElementById('strict').addEventListener('change', runCheck);
+  document.getElementById('ignore').addEventListener('change', runCheck);
+
+  // 🔄 Recreate worker when mypy version changes
+  document.getElementById('mypyver').addEventListener('change', () => {
+    startWorker();
+  });
+
+  editor.onDidChangeModelContent(() => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(runCheck, 500);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') runCheck();
+  });
+});
 </script>
 </body>
 </html>
