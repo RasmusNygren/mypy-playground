@@ -74,11 +74,11 @@ require(['vs/editor/editor.main'], () => {
     if (type === 'init-done') {
       ready = true;
       setStatus('ready');
+      const v = payload?.versions || {};
       document.getElementById('versions').textContent =
-        `Pyodide ${payload.versions.pyodide}, mypy ${payload.versions.mypy}`;
-      // warmup import path
+        `Pyodide ${v.pyodide ?? '—'} • Python ${v.python ?? '—'} • mypy ${v.mypy ?? '—'}`;
       worker.postMessage({ type: 'warmup' });
-      runCheck(); // first run
+      runCheck();
     } else if (type === 'checking') {
       setStatus('checking…');
     } else if (type === 'result') {
@@ -145,30 +145,49 @@ function runCheck() {
   });
 }
 
+let decorationIds = [];
+
+
 function renderDiagnostics({ diagnostics, text }) {
-  // Render raw text
   const res = document.getElementById('results');
-  if (!diagnostics.length) {
-    res.innerHTML = `<div class="ok">Success: no issues found</div><pre>${text}</pre>`;
+  const list = Array.isArray(diagnostics) ? diagnostics : [];
+
+  if (list.length === 0) {
+    res.innerHTML = `<div class="ok">Success: no issues found</div>`;
   } else {
-    res.innerHTML = diagnostics.map(d => `
-      <div class="err">
-        <div><strong>${d.file}:${d.line}:${d.column}</strong>  <code>[${d.code}]</code></div>
-        <div>${escapeHtml(d.message)}</div>
-      </div>`).join('') + `<pre>${text}</pre>`;
+    const itemsHtml = list.map(d => {
+      const codeLabel = d.code ? ` <code>[${escapeHtml(d.code)}]</code>` : '';
+      const pos = `${escapeHtml(d.file)}:${d.line}${d.column ? ':' + d.column : ''}`;
+      return `
+        <div class="err">
+          <div><strong>${pos}</strong>${codeLabel}</div>
+          <div>${escapeHtml(d.message)}</div>
+        </div>
+      `;
+    }).join('');
+    res.innerHTML = itemsHtml;
+
+    // Optional: collapsible raw output (so you can copy it if needed)
+    const details = document.createElement('details');
+    details.innerHTML = `<summary>Raw mypy output</summary><pre>${escapeHtml(text || '')}</pre>`;
+    res.appendChild(details);
   }
 
-  // Monaco decorations
-  const decorations = diagnostics.map(d => ({
-    range: new monaco.Range(d.line, d.column || 1, d.line, (d.column || 1) + 1),
+  // Update Monaco decorations (replace old ones)
+  const newDecorations = list.map(d => ({
+    range: new monaco.Range(
+      d.line,
+      Math.max(d.column || 1, 1),
+      d.line,
+      Math.max((d.column || 1) + 1, 2)
+    ),
     options: {
-      isWholeLine: false,
       inlineClassName: 'squiggle-error',
       glyphMarginClassName: 'glyph-error',
-      glyphMarginHoverMessage: { value: `${d.message} [${d.code}]` }
+      glyphMarginHoverMessage: { value: `${escapeHtml(d.message)}${d.code ? ' [' + escapeHtml(d.code) + ']' : ''}` }
     }
   }));
-  editor.deltaDecorations([], decorations);
+  decorationIds = editor.deltaDecorations(decorationIds, newDecorations);
 }
 
 function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }

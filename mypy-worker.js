@@ -16,21 +16,25 @@ self.onmessage = async (e) => {
         stdout: (s) => post("log", s),
         stderr: (s) => post("log", s),
       });
+
       await pyodide.loadPackage("micropip");
-
       await pyodide.runPythonAsync(`
-import micropip
-await micropip.install(["mypy==1.10.0", "typing-extensions", "mypy-extensions"])
+    import micropip
+    await micropip.install(["mypy==1.10.0", "typing-extensions", "mypy-extensions"])
       `);
 
-      // ⬇️ Ensure we send plain JS, not PyProxy
-      let vproxy = await pyodide.runPythonAsync(`
-import importlib.metadata as md
-{"pyodide": "0.25.1", "mypy": md.version("mypy")}
-      `);
-      const versions = vproxy.toJs();     // convert
-      vproxy.destroy?.();                 // free proxy
-      post("init-done", { versions });
+      // Get versions as plain JS strings (no PyProxy leakage)
+      const pythonVersion = pyodide.runPython(`import sys; sys.version.split()[0]`);
+      const pyodideVersion = (pyodide.version || "Unknown"); // fallback if .version missing
+      let mypyVerProxy = await pyodide.runPythonAsync(`import importlib.metadata as md; md.version("mypy")`);
+      const mypyVersion = (mypyVerProxy.toJs ? mypyVerProxy.toJs() : mypyVerProxy);
+      mypyVerProxy.destroy?.();
+
+      post("init-done", { versions: {
+        pyodide: String(pyodideVersion),
+        python: String(pythonVersion),
+        mypy: String(mypyVersion)
+      }});
     }
 
     else if (type === "warmup") {
