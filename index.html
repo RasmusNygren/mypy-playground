@@ -36,7 +36,7 @@
           <button id="run">Check</button>
           <label>Python
             <select id="pyver">
-              <option>3.12</option><option selected>3.11</option><option>3.10</option><option>3.9</option><option>3.8</option>
+              <option selected>3.13</option><option>3.12</option><option>3.11</option><option>3.10</option><option>3.9</option><option>3.8</option>
             </select>
           </label>
             <label>mypy
@@ -202,7 +202,7 @@ function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt
 require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
 require(['vs/editor/editor.main'], () => {
   editor = monaco.editor.create(document.getElementById('editor'), {
-    value: `# Try changing "mypy" and "Python" versions in the right panel\nfrom typing import List\n\ndef greet(name: str) -> str:\n    return "hi " + name\n\nx: List[int] = ["oops"]\nprint(greet(123))\n`,
+    value: `def greet(name: str) -> str:\n    return "hi " + name\n\nx: list[int] = ["error"]\nprint(greet(123))\n`,
     language: 'python',
     automaticLayout: true,
     minimap: { enabled: false },
