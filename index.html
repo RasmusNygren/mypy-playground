@@ -202,7 +202,7 @@ function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt
 require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
 require(['vs/editor/editor.main'], () => {
   editor = monaco.editor.create(document.getElementById('editor'), {
-    value: `def greet(name: str) -> str:\n    return "hi " + name\n\nx: list[int] = ["error"]\nprint(greet(123))\n`,
+    value: `def greet(name: str) -> str:\n    return "hi " + name\n\nx: list[int] = ["error"]\nprint(greet(123))`,
     language: 'python',
     automaticLayout: true,
     minimap: { enabled: false },
